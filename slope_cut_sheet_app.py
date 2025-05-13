@@ -2,76 +2,74 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-# --- App Title ---
+# App Config
+st.set_page_config(page_title="Slope Cut Sheet", layout="centered")
+
 st.title("Slope Cut Sheet Generator")
 
 # --- Input Section ---
-st.header("Enter Slope Parameters")
+st.header("Input Parameters")
 
 begin_station = st.number_input("Begin Station", value=0.0)
 end_station = st.number_input("End Station", value=100.0)
 begin_elev = st.number_input("Elevation at Begin Station", value=100.0)
 end_elev = st.number_input("Elevation at End Station", value=110.0)
-increment = st.number_input("Station Increment", value=25.0, min_value=1.0)
+increment = st.number_input("Station Increment", value=25.0)
 
 custom_stations_input = st.text_input(
-    "Optional: Enter custom stations (e.g., 25,45,85)",
-    value="25,45,85"
+    "Optional: Enter custom stations (e.g., 25,45,85)", value="25,45,85"
 )
 
-# --- Slope Calculation ---
+# --- Data Calculation ---
 slope = (end_elev - begin_elev) / (end_station - begin_station)
-slope_pct = slope * 100
+slope_percent = round(slope * 100, 2)
 
-# --- Adjusted Range ---
-start_aligned = begin_station
-if begin_station % increment != 0:
-    start_aligned = begin_station + (increment - (begin_station % increment))
+# Round begin station to nearest increment
+remainder = begin_station % increment
+start_at = begin_station if remainder == 0 else begin_station + (increment - remainder)
 
-incremental_stations = np.arange(start_aligned, end_station, increment)
-stations_all = np.concatenate(([begin_station], incremental_stations, [end_station]))
-stations_all = np.unique(np.round(stations_all, 3))
-
-# --- Elevation Calculation ---
-elevations = begin_elev + slope * (stations_all - begin_station)
-
-# --- Format Station Labels ---
-def format_station(val):
-    return f"{int(val)//100}+{int(val)%100:02}"
-
-formatted_stations = [format_station(s) for s in stations_all]
+standard_stations = np.arange(start_at, end_station + increment, increment)
+elevations = begin_elev + slope * (standard_stations - begin_station)
 
 df_main = pd.DataFrame({
-    "Elevation (ft)": np.round(elevations, 3),
-    "Station": formatted_stations
+    "Station": [f"{int(s//100)}+{int(s%100):02}" for s in standard_stations],
+    "Elevation (ft)": np.round(elevations, 3)
 })
 
 # --- Custom Stations ---
 df_custom = pd.DataFrame()
 if custom_stations_input.strip():
     try:
-        custom_raw = [float(s.strip()) for s in custom_stations_input.split(',')]
-        custom_clean = [s for s in custom_raw if s not in stations_all]
+        custom_stations = [float(s.strip()) for s in custom_stations_input.split(',')]
+        custom_stations = [s for s in custom_stations if s not in standard_stations]
+        custom_elevs = begin_elev + slope * (np.array(custom_stations) - begin_station)
 
-        if custom_clean:
-            custom_elevs = begin_elev + slope * (np.array(custom_clean) - begin_station)
-            formatted_custom = [format_station(s) for s in custom_clean]
-
-            df_custom = pd.DataFrame({
-                "Elevation (ft)": np.round(custom_elevs, 3),
-                "Station": formatted_custom
-            })
-    except Exception as e:
-        st.error(f"Invalid input for custom stations: {e}")
+        df_custom = pd.DataFrame({
+            "Station": [f"{int(s//100)}+{int(s%100):02}" for s in custom_stations],
+            "Elevation (ft)": np.round(custom_elevs, 3)
+        })
+    except:
+        st.error("Invalid format for custom stations. Use comma-separated numbers.")
 
 # --- Combine and Sort ---
-df_combined = pd.concat([df_main, df_custom], ignore_index=True)
-df_combined = df_combined.sort_values("Station").reset_index(drop=True)
+df_combined = pd.concat([df_main, df_custom]).drop_duplicates()
+df_combined["Sort"] = df_combined["Station"].apply(lambda x: int(x.replace("+", "")))
+df_combined = df_combined.sort_values("Sort").drop(columns="Sort").reset_index(drop=True)
 
-# --- Display ---
-st.markdown(f"**Slope:** {slope_pct:.2f}%")
-st.dataframe(df_combined)
+# --- Display Output ---
+st.subheader(f"Slope: {slope_percent:.2f}%")
 
-# --- Export ---
+def render_html_table(df):
+    html = '<style>table, th, td {border: 1px solid black; border-collapse: collapse; padding: 0px; margin: 0px; font-size: 14px;} th, td {text-align: center;}</style>'
+    html += '<table>'
+    html += '<tr>' + ''.join(f'<th>{col}</th>' for col in df.columns) + '</tr>'
+    for _, row in df.iterrows():
+        html += '<tr>' + ''.join(f'<td>{row[col]}</td>' for col in df.columns) + '</tr>'
+    html += '</table>'
+    st.markdown(html, unsafe_allow_html=True)
+
+render_html_table(df_combined)
+
+# --- Download Option ---
 csv = df_combined.to_csv(index=False).encode('utf-8')
 st.download_button("Download CSV", csv, "slope_cut_sheet.csv", "text/csv")
